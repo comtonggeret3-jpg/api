@@ -50,12 +50,14 @@ module.exports = async (req, res) => {
         if (s) size = s[1].trim();
       }
 
-      // img dari <img src="https://sfile.co/icon/smallicon/hc.svg"
+            // img - selector paling longgar
       let img = null;
-      let imgMatch = g.match(/<img src="([^"]+)" alt="File icon"/i) || g.match(/<img src="([^"]+)"/i);
+      let imgMatch = g.match(/<img[^>]*src="([^"]+)"/i);
       if (imgMatch) {
-        img = imgMatch[1];
-        if (!img.startsWith('http')) img = 'https://sfile.co' + img;
+        img = imgMatch[1].trim();
+        if (!img.startsWith('http') && !img.startsWith('data:')) {
+          img = 'https://sfile.co' + (img.startsWith('/') ? '' : '/') + img;
+        }
       }
 
       results.push({
