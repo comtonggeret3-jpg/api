@@ -9,52 +9,52 @@ module.exports = async (req, res) => {
   try {
     const r = await fetch(target, { headers: { "User-Agent": "Mozilla/5.0 Chrome/120", "Referer": "https://sfile.co/" } });
     const html = await r.text();
-    let results = []; let seen = new Set();
-    const parts = html.split(/<div|<li/g);
 
-    for (let part of parts) {
-      if (!part.includes('sfile.co')) continue;
-      let linkMatch = part.match(/href="(\/[^"]+|https:\/\/sfile\.co[^"]+)"[^>]*>([^<]{5,150})</i);
-      if (!linkMatch) continue;
-      let href = linkMatch[1]; let title = linkMatch[2].trim();
-      if (!/\d/.test(href) || href.includes('search') || /next|prev/i.test(title)) continue;
-      if (!href.startsWith('http')) href = 'https://sfile.co' + href;
-      let key = href.toLowerCase(); if (seen.has(key)) continue; seen.add(key);
+    let results = []; let seen = new Set();
+
+    // Regex sesuai HTML baru yang kamu kirim
+    const regex = /<div class="group px-2[\s\S]*?<img src="([^"]+)"[\s\S]*?<a href="(https:\/\/sfile\.co\/[^"]+)" class="search-result-link[^>]*>([^<]+)<\/a>[\s\S]*?<p class="mt-1[^>]*>([^<]+)<\/p>/gi;
+
+    let m;
+    while ((m = regex.exec(html)) !== null) {
+      let img = m[1].trim();
+      let href = m[2].trim();
+      let title = m[3].trim();
+      let info = m[4].trim(); // "48.3 KB • 11 Nov 2026"
+
+      if (seen.has(href.toLowerCase())) continue;
+      seen.add(href.toLowerCase());
 
       let size = "Unknown";
-      let sizeMatch = part.match(/(\d+(?:\.\d+)?\s*(?:B|KB|MB|GB))/i);
-      if (sizeMatch) size = sizeMatch[1].trim();
+      let sizeMatch = info.match(/(\d+(?:\.\d+)?\s*(?:B|KB|MB|GB))/i);
+      if (sizeMatch) size = sizeMatch[1];
 
-      // SELECTOR IMG LENGKAP - semua kemungkinan
-      let img = null;
-      let imgSelectors = [
-        /<img[^>]+data-src="([^"]+)"/i,
-        /<img[^>]+data-original="([^"]+)"/i,
-        /<img[^>]+data-lazy-src="([^"]+)"/i,
-        /<img[^>]+src="([^"]+)"/i,
-        /<source[^>]+srcset="([^"]+)"/i,
-        /background-image:\s*url\(['"]?([^'")]+)['"]?\)/i
-      ];
-      for (let sel of imgSelectors) {
-        let m = part.match(sel);
-        if (m && m[1]) {
-          img = m[1].split(' ')[0].split(',')[0]; // ambil url pertama kalau srcset
-          if (img.includes('data:image') || img.includes('blank.gif') || img.includes('lazy')) continue;
-          if (!img.startsWith('http')) img = 'https://sfile.co' + img;
-          break;
-        }
-      }
+      if (!img.startsWith('http')) img = 'https://sfile.co' + img;
 
-      if (title.length < 5) continue;
-      results.push({ file_name: title, file_size: size, file_url: href, file_img: img });
-      if (results.length >= 20) break;
+      results.push({
+        file_name: title,
+        file_size: size,
+        file_url: href,
+        file_img: img, // sekarang bakal https://sfile.co/icon/smallicon/hc.svg
+        file_info: info
+      });
     }
 
-    const data = { query: q, page, total_in_page: results.length, pagination: { current_page: page, has_next: results.length>=10, has_prev: page>1, next_page: page+1, prev_page: page>1?page-1:null }, results };
+    const data = {
+      query: q,
+      page,
+      source: target,
+      total_in_page: results.length,
+      pagination: { current_page: page, has_next: results.length>=10, has_prev: page>1, next_page: page+1, prev_page: page>1?page-1:null },
+      results
+    };
+
     if (req.query.callback) {
       res.setHeader("Content-Type", "application/javascript; charset=utf-8");
       return res.send(`${req.query.callback.replace(/[^a-zA-Z0-9_]/g,'')}(${JSON.stringify(data)});`);
     }
     res.json(data);
-  } catch (e) { res.status(500).json({ error: e.message, results: [] }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message, results: [] });
+  }
 };
