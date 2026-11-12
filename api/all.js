@@ -1,10 +1,12 @@
+const { JSDOM } = require('jsdom');
+
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   if (req.method === "OPTIONS") return res.status(200).end();
 
   const url = req.query.url || '';
-  let pathStr = req.query.path || 'body'; // default seluruh html kayak PHP
+  let pathStr = req.query.path || 'body';
 
   if (!url) return res.json({ error: "butuh ?url=...&path=body>div>.class:0" });
 
@@ -19,103 +21,78 @@ module.exports = async (req, res) => {
     let html = await r.text();
     const baseOrigin = new URL(url).origin;
 
-    // ===== FUNGSI getPath() SAMA KAYAK PHP =====
-    // path contoh: body > div > .search-result:0 > a:1
-    function getPath(htmlStr, pathStr) {
-      let cur = [htmlStr];
-      const parts = pathStr.split('>').map(s => s.trim()).filter(Boolean);
+    const dom = new JSDOM(html);
+    const document = dom.window.document;
 
+    // ===== getPath() SAMA PERSIS KAYAK PHP =====
+    function getPath(pathStr) {
+      const parts = pathStr.split('>').map(s => s.trim()).filter(Boolean);
+      let cur = [document];
+      
       for (let rawP of parts) {
-        if (!rawP || rawP === 'body' || rawP === 'html') continue;
-        
+        if (!rawP || rawP === 'body' || rawP === 'html' || rawP === 'body html') continue;
         let idx = null;
         const m = rawP.match(/(.+):(\d+)$/);
         let p = rawP;
         if (m) { p = m[1].trim(); idx = parseInt(m[2]); }
 
         let next = [];
-        for (let h of cur) {
-          let regex;
+        for (let ctx of cur) {
+          let found;
           if (p.startsWith('.')) {
-            // .className -> cari tag yang class nya mengandung itu
             const cls = p.substring(1);
-            // cari <div class="...cls..."> ... </div>
-            regex = new RegExp(`<([a-z0-9]+)[^>]*class="[^"]*${cls}[^"]*"[^>]*>([\\s\\S]*?)<\\/\\1>`, 'gi');
+            found = ctx.querySelectorAll ? ctx.querySelectorAll(`[class*="${cls}"]`) : [];
           } else {
-            // tag biasa: div, a, p
-            regex = new RegExp(`<${p}[^>]*>([\\s\\S]*?)<\\/${p}>`, 'gi');
+            try {
+              found = ctx.querySelectorAll ? ctx.querySelectorAll(p) : [];
+            } catch { found = []; }
           }
-
-          let match;
-          while ((match = regex.exec(h)) !== null) {
-            next.push(match[0]); // full html element
-          }
+          found.forEach(el => next.push(el));
         }
-
-        if (idx !== null) {
-          cur = next[idx] ? [next[idx]] : [];
-        } else {
-          cur = next;
-        }
+        cur = idx !== null ? (next[idx] ? [next[idx]] : []) : next;
         if (cur.length === 0) break;
       }
       return cur;
     }
 
-    // ===== FUNGSI pecah_unlimited() SAMA KAYAK PHP =====
+    // ===== pecah_unlimited() SAMA PERSIS KAYAK PHP =====
     let totalNodes = 0;
-    function pecah_unlimited(htmlChunk) {
+    function pecah_unlimited(node) {
       const arr = [];
-      if (totalNodes > 500 || !htmlChunk) return arr;
-
-      // ambil inner content
-      const innerMatch = htmlChunk.match(/^<[^>]+>([\s\S]*)<\/[^>]+>$/);
-      const inner = innerMatch ? innerMatch[1] : htmlChunk;
-
-      // regex cari child tag langsung
-      const childRegex = /<([a-z0-9]+)([^>]*)>([\s\S]*?)<\/\1>/gi;
-      let m;
-
-      while ((m = childRegex.exec(inner)) !== null) {
+      if (!node || !node.childNodes) return arr;
+      
+      for (let child of node.childNodes) {
         if (totalNodes > 500) break;
-
-        const tag = m[1].toLowerCase();
-        if (['script','style','noscript','svg','path'].includes(tag)) continue;
-
-        const attrs = m[2];
-        const content = m[3];
-
+        if (child.nodeType !== 1) continue;
         totalNodes++;
 
-        let text = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        if (text.length > 200) {
-          const first = content.match(/^([^<]+)/);
-          text = first ? first[1].trim().slice(0,100) : text.slice(0,100);
+        let txt = (child.textContent || '').trim();
+        let shortText = txt;
+        if (txt.length > 200) {
+          shortText = child.firstChild ? (child.firstChild.textContent || '').trim().slice(0,100) : txt.slice(0,100);
         }
 
-        let item = { tag, text };
+        let item = {
+          tag: child.tagName.toLowerCase(),
+          text: shortText
+        };
 
-        // === KEY URL & SRC BIAR KEBACA (SAMA KAYAK PHP) ===
-        const href = attrs.match(/href\s*=\s*["']([^"']+)["']/i);
-        if (href) {
-          let u = href[1];
+        if (child.hasAttribute('href')) {
+          let u = child.getAttribute('href');
           if (u.startsWith('/')) u = baseOrigin + u;
-          if (!u.startsWith('#') && !u.startsWith('javascript')) item.url = u;
+          item.url = u;
         }
-        const src = attrs.match(/src\s*=\s*["']([^"']+)["']/i);
-        if (src) {
-          let s = src[1];
+        if (child.hasAttribute('src')) {
+          let s = child.getAttribute('src');
           if (s.startsWith('/')) s = baseOrigin + s;
           item.src = s;
         }
 
-        // rekursif kayak di PHP
-        if (content.includes('<') && text.length < 150) {
-          const inside = pecah_unlimited(m[0]);
-          if (inside.length) item.inside = inside;
-        }
+        const inside = pecah_unlimited(child);
+        if (inside.length) item.inside = inside;
 
-        if (item.text || item.url || item.src) {
+        // biar gak kosong kayak sebelumnya, filter yang ada isinya
+        if (item.text || item.url || item.src || item.inside) {
           arr.push(item);
         }
       }
@@ -123,30 +100,17 @@ module.exports = async (req, res) => {
     }
 
     // ===== EKSEKUSI =====
-    let targetHtmls = [];
+    let nodes = [];
     if (!pathStr || pathStr === 'body') {
-      targetHtmls = [html]; // default seluruh isi html
+      nodes = [document.body || document.documentElement];
     } else {
-      targetHtmls = getPath(html, pathStr);
-      // kalau path gak ketemu, fallback ke seluruh html biar gak kosong
-      if (targetHtmls.length === 0) targetHtmls = [html];
+      nodes = getPath(pathStr);
+      if (nodes.length === 0) nodes = [document.body]; // fallback biar gak kosong
     }
 
-    let hasil = pecah_unlimited(targetHtmls[0]);
+    const hasil = nodes.length ? pecah_unlimited(nodes[0]) : [];
 
-    // fallback terakhir biar gak kosong: cari semua <a>
-    if (hasil.length === 0) {
-      const aRegex = /<a[^>]*href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/gi;
-      let am;
-      while ((am = aRegex.exec(targetHtmls[0])) !== null) {
-        if (totalNodes++ > 500) break;
-        let u = am[1];
-        if (u.startsWith('/')) u = baseOrigin + u;
-        hasil.push({ tag: 'a', text: am[2].trim(), url: u });
-      }
-    }
-
-    return res.json(hasil);
+    return res.json(hasil.length ? hasil : [{ error: "path tidak ketemu", path: pathStr, html_len: html.length }]);
 
   } catch (e) {
     return res.status(500).json({ error: e.message, stack: e.stack });
