@@ -29,7 +29,7 @@ async function poll(){
     status.textContent=json.count+' servers detected | last: '+new Date().toLocaleTimeString()+' | live 5s';
   }catch(e){ status.textContent='error: '+e.message; }
 }
-poll(); setInterval(poll,5000);
+poll(); setInterval(poll,1000);
 <\/script></body></html>
 `);
 };
